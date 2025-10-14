@@ -2,6 +2,7 @@ import os
 import re
 import shutil
 from flask import Flask, render_template, request, send_file, jsonify, flash, redirect, url_for
+from flask_cors import CORS
 from pytubefix import YouTube
 from pytubefix.exceptions import VideoUnavailable, RegexMatchError
 import tempfile
@@ -12,6 +13,7 @@ from config import config
 
 # Initialize Flask app
 app = Flask(__name__)
+CORS(app)  # Enable CORS for all routes
 
 # Load configuration
 config_name = os.environ.get('FLASK_CONFIG', 'default')
