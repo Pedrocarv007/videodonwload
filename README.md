@@ -58,7 +58,6 @@ source venv/bin/activate
 
 3. **Instale as dependências**
 ```bash
-pip install flask pytubefix
 pip install -r requirements.txt
 ```
 
@@ -217,6 +216,7 @@ run_iis.bat
 ```
 *Configure as regras do IIS conforme `GUIA_IIS.md`*
 
+### Produção Linux (exemplo com Gunicorn)
 ```bash
 pip install gunicorn
 gunicorn -w 4 -b 0.0.0.0:5000 app:app
