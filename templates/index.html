@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Video Downloader - Download de Vídeos Profissional</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <div class="logo">
+                <i class="fab fa-youtube"></i>
+                <h1>YouTube Downloader</h1>
+            </div>
+            <p class="subtitle">Download de vídeos do YouTube de forma rápida e segura</p>
+        </header>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-messages">
+                    {% for category, message in messages %}
+                        <div class="flash-message flash-{{ category }}">
+                            <i class="fas fa-{{ 'check-circle' if category == 'success' else 'info-circle' if category == 'info' else 'exclamation-triangle' }}"></i>
+                            {{ message }}
+                            <button class="close-btn" onclick="this.parentElement.remove()">×</button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        <main class="main-content">
+            <!-- URL Input Section -->
+            <div class="input-section">
+                <div class="url-input-container">
+                    <input type="url" id="videoUrl" placeholder="Cole a URL do vídeo do YouTube aqui..." required>
+                    <button type="button" id="previewBtn" class="preview-btn">
+                        <i class="fas fa-search"></i>
+                        Visualizar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Video Preview Section -->
+            <div id="videoPreview" class="video-preview" style="display: none;">
+                <div class="video-info">
+                    <img id="videoThumbnail" src="" alt="Thumbnail do vídeo">
+                    <div class="video-details">
+                        <h3 id="videoTitle"></h3>
+                        <p class="video-meta">
+                            <span id="videoAuthor"></span> • 
+                            <span id="videoDuration"></span> • 
+                            <span id="videoViews"></span> visualizações
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Download Form -->
+            <form id="downloadForm" method="POST" action="/download" class="download-form">
+                <input type="hidden" name="url" id="downloadUrl">
+                
+                <div class="quality-section">
+                    <h3><i class="fas fa-cog"></i> Opções de Download</h3>
+                    <div class="quality-options">
+                        <label class="quality-option">
+                            <input type="radio" name="quality" value="highest" checked>
+                            <div class="option-content">
+                                <i class="fas fa-video"></i>
+                                <span>Máxima Qualidade</span>
+                                <small>MP4 - Melhor resolução disponível</small>
+                            </div>
+                        </label>
+                        
+                        <label class="quality-option">
+                            <input type="radio" name="quality" value="lowest">
+                            <div class="option-content">
+                                <i class="fas fa-compress"></i>
+                                <span>Qualidade Baixa</span>
+                                <small>MP4 - Arquivo menor</small>
+                            </div>
+                        </label>
+                        
+                        <label class="quality-option">
+                            <input type="radio" name="quality" value="audio">
+                            <div class="option-content">
+                                <i class="fas fa-music"></i>
+                                <span>Apenas Áudio</span>
+                                <small>MP3 - Somente o áudio</small>
+                            </div>
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit" class="download-btn" id="downloadBtn">
+                    <i class="fas fa-download"></i>
+                    Baixar Vídeo
+                </button>
+            </form>
+
+            <!-- Progress Bar -->
+            <div id="progressContainer" class="progress-container" style="display: none;">
+                <div class="progress-info">
+                    <span>Baixando...</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>&copy; 2025 YouTube Downloader. Feito com ❤️ para downloads seguros.</p>
+            <p><small>Use apenas com vídeos que você tem permissão para baixar.</small></p>
+        </footer>
+    </div>
+
+    <script>
+        const videoUrlInput = document.getElementById('videoUrl');
+        const previewBtn = document.getElementById('previewBtn');
+        const videoPreview = document.getElementById('videoPreview');
+        const downloadForm = document.getElementById('downloadForm');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const progressContainer = document.getElementById('progressContainer');
+
+        // Preview video information
+        previewBtn.addEventListener('click', async () => {
+            const url = videoUrlInput.value.trim();
+            if (!url) {
+                alert('Por favor, insira uma URL do YouTube.');
+                return;
+            }
+
+            previewBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Carregando...';
+            previewBtn.disabled = true;
+
+            try {
+                const response = await fetch(`/video_info?url=${encodeURIComponent(url)}`);
+                const data = await response.json();
+
+                if (response.ok) {
+                    // Display video information
+                    document.getElementById('videoThumbnail').src = data.thumbnail;
+                    document.getElementById('videoTitle').textContent = data.title;
+                    document.getElementById('videoAuthor').textContent = data.author;
+                    document.getElementById('videoDuration').textContent = formatDuration(data.length);
+                    document.getElementById('videoViews').textContent = formatViews(data.views);
+                    document.getElementById('downloadUrl').value = url;
+                    
+                    videoPreview.style.display = 'block';
+                    downloadForm.style.display = 'block';
+                } else {
+                    alert('Erro: ' + data.error);
+                }
+            } catch (error) {
+                alert('Erro ao carregar informações do vídeo: ' + error.message);
+            }
+
+            previewBtn.innerHTML = '<i class="fas fa-search"></i> Visualizar';
+            previewBtn.disabled = false;
+        });
+
+        // Handle form submission
+        downloadForm.addEventListener('submit', (e) => {
+            downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Baixando...';
+            downloadBtn.disabled = true;
+            progressContainer.style.display = 'block';
+            
+            // Simulate progress (you can implement real progress tracking)
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += Math.random() * 10;
+                if (progress > 95) progress = 100;
+                
+                document.getElementById('progressFill').style.width = progress + '%';
+                document.getElementById('progressPercent').textContent = Math.round(progress) + '%';
+                
+                if (progress >= 95) {
+                    clearInterval(progressInterval);
+                     downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Baixado!';
+                }
+            }, 500);
+        });
+
+        // Format duration from seconds to mm:ss
+        function formatDuration(seconds) {
+            const minutes = Math.floor(seconds / 60);
+            const remainingSeconds = seconds % 60;
+            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+        }
+
+        // Format view count
+        function formatViews(views) {
+            if (views >= 1000000) {
+                return (views / 1000000).toFixed(1) + 'M';
+            } else if (views >= 1000) {
+                return (views / 1000).toFixed(1) + 'K';
+            }
+            return views.toString();
+        }
+
+        // Auto-close flash messages
+        setTimeout(() => {
+            const flashMessages = document.querySelectorAll('.flash-message');
+            flashMessages.forEach(msg => {
+                msg.style.opacity = '0';
+                setTimeout(() => msg.remove(), 300);
+            });
+        }, 5000);
+    </script>
+</body>
+</html>
