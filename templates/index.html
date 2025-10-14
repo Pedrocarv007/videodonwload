@@ -1,12 +1,16 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
+    <base href="/youtube/">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Video Downloader - Download de Vídeos Profissional</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="shortcut icon" href="https://www.thecarv.com/thecarv/thecarv-logo.png" type="image/x-icon">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+
 </head>
 <body>
     <div class="container">
@@ -115,122 +119,220 @@
         </main>
 
         <footer class="footer">
-            <p>&copy; 2025 YouTube Downloader. Feito com ❤️ para downloads seguros.</p>
+            <p>&copy; 2025 Thecarv Downloader. Feito com ❤️ para downloads seguros.</p>
             <p><small>Use apenas com vídeos que você tem permissão para baixar.</small></p>
         </footer>
     </div>
 
-    <script>
-        const videoUrlInput = document.getElementById('videoUrl');
-        const previewBtn = document.getElementById('previewBtn');
-        const videoPreview = document.getElementById('videoPreview');
-        const downloadForm = document.getElementById('downloadForm');
-        const downloadBtn = document.getElementById('downloadBtn');
-        const progressContainer = document.getElementById('progressContainer');
+<script>
+function $(id){ return document.getElementById(id); }
 
-        // Preview video information
-        previewBtn.addEventListener('click', async () => {
-            const url = videoUrlInput.value.trim();
-            if (!url) {
-                alert('Por favor, insira uma URL do YouTube.');
-                return;
-            }
+async function previewVideo() {
+  const url = $("videoUrl").value.trim();
+  const preview = $("videoPreview");
+  const thumb = $("videoThumbnail");
+  const title = $("videoTitle");
+  const author = $("videoAuthor");
+  const durationSpan = $("videoDuration");
+  const viewsSpan = $("videoViews");
+  const downloadForm = $("downloadForm");
 
-            previewBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Carregando...';
-            previewBtn.disabled = true;
+  if (!url) {
+    Swal.fire({
+      icon: "warning",
+      title: "URL em falta",
+      text: "Por favor, insira uma URL do YouTube."
+    });
+    return;
+  }
 
-            try {
-                console.log('Fazendo requisição para:', `http://localhost:6001/video_info?url=${encodeURIComponent(url)}`);
-                const response = await fetch(`http://localhost:6001/video_info?url=${encodeURIComponent(url)}`);
-                
-                console.log('Response status:', response.status);
-                console.log('Response headers:', response.headers);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                const contentType = response.headers.get('content-type');
-                if (!contentType || !contentType.includes('application/json')) {
-                    const text = await response.text();
-                    console.error('Response is not JSON:', text);
-                    throw new Error('Resposta do servidor não é JSON válido');
-                }
-                
-                const data = await response.json();
-                console.log('Dados recebidos:', data);
+  if (!url.includes("youtube.com") && !url.includes("youtu.be")) {
+    Swal.fire({
+      icon: "error",
+      title: "URL inválida",
+      text: "Por favor, insira uma URL válida do YouTube."
+    });
+    return;
+  }
 
-                if (data.error) {
-                    throw new Error(data.error);
-                }
+  // Mostra “loading”
+  Swal.fire({
+    title: "A carregar informações...",
+    text: "Aguarde um momento enquanto obtemos os dados do vídeo.",
+    allowOutsideClick: false,
+    didOpen: () => {
+      Swal.showLoading();
+    }
+  });
 
-                // Display video information
-                document.getElementById('videoThumbnail').src = data.thumbnail;
-                document.getElementById('videoTitle').textContent = data.title;
-                document.getElementById('videoAuthor').textContent = data.author;
-                document.getElementById('videoDuration').textContent = formatDuration(data.length);
-                document.getElementById('videoViews').textContent = formatViews(data.views);
-                document.getElementById('downloadUrl').value = url;
-                
-                videoPreview.style.display = 'block';
-                downloadForm.style.display = 'block';
-                
-            } catch (error) {
-                console.error('Erro completo:', error);
-                alert('Erro ao carregar informações do vídeo: ' + error.message);
-            }
+  try {
+    const res = await fetch("video_info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url })
+    });
 
-            previewBtn.innerHTML = '<i class="fas fa-search"></i> Visualizar';
-            previewBtn.disabled = false;
-        });
+    if (!res.ok) {
+      let info;
+      try { info = await res.json(); } catch { /* ignora */ }
+      throw new Error(info?.error || `Erro HTTP ${res.status}`);
+    }
 
-        // Handle form submission
-        downloadForm.addEventListener('submit', (e) => {
-            downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Baixando...';
-            downloadBtn.disabled = true;
-            progressContainer.style.display = 'block';
-            
-            // Simulate progress (you can implement real progress tracking)
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += Math.random() * 10;
-                if (progress > 95) progress = 100;
-                
-                document.getElementById('progressFill').style.width = progress + '%';
-                document.getElementById('progressPercent').textContent = Math.round(progress) + '%';
-                
-                if (progress >= 95) {
-                    clearInterval(progressInterval);
-                     downloadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Baixado!';
-                }
-            }, 500);
-        });
+    const data = await res.json();
 
-        // Format duration from seconds to mm:ss
-        function formatDuration(seconds) {
-            const minutes = Math.floor(seconds / 60);
-            const remainingSeconds = seconds % 60;
-            return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
-        }
+    // Fecha o alerta de loading
+    Swal.close();
 
-        // Format view count
-        function formatViews(views) {
-            if (views >= 1000000) {
-                return (views / 1000000).toFixed(1) + 'M';
-            } else if (views >= 1000) {
-                return (views / 1000).toFixed(1) + 'K';
-            }
-            return views.toString();
-        }
+    // Atualiza preview
+    preview.style.display = "block";
+    title.textContent = data.title || "Sem título";
+    author.textContent = data.author || "Autor desconhecido";
+    durationSpan.textContent = formatDuration(data.length);
+    viewsSpan.textContent = formatViews(data.views);
+    if (data.thumbnail_url) thumb.src = data.thumbnail_url;
 
-        // Auto-close flash messages
-        setTimeout(() => {
-            const flashMessages = document.querySelectorAll('.flash-message');
-            flashMessages.forEach(msg => {
-                msg.style.opacity = '0';
-                setTimeout(() => msg.remove(), 300);
-            });
-        }, 5000);
-    </script>
+    // Atualiza URL do formulário
+    const hiddenUrl = document.createElement("input");
+    hiddenUrl.type = "hidden";
+    hiddenUrl.name = "url";
+    hiddenUrl.value = url;
+    const prevHidden = downloadForm.querySelector('input[name="url"]');
+    if (prevHidden) prevHidden.remove();
+    downloadForm.prepend(hiddenUrl);
+
+    downloadForm.action = "download";
+
+    // Mostra alerta de sucesso
+    Swal.fire({
+      icon: "success",
+      title: "Vídeo carregado!",
+      text: "As informações do vídeo foram obtidas com sucesso.",
+      timer: 2000,
+      showConfirmButton: false
+    });
+
+  } catch (e) {
+    Swal.fire({
+      icon: "error",
+      title: "Erro ao carregar vídeo",
+      text: e.message || "Não foi possível obter informações do vídeo."
+    });
+    preview.style.display = "none";
+  }
+}
+
+function formatDuration(seconds) {
+  if (!seconds && seconds !== 0) return "N/A";
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  return h > 0 ? `${h}h ${m}m ${s}s` : `${m}m ${s}s`;
+}
+
+function formatViews(v) {
+  if (!v && v !== 0) return "N/A";
+  if (v >= 1_000_000) return (v/1_000_000).toFixed(1) + "M";
+  if (v >= 1_000) return (v/1_000).toFixed(1) + "K";
+  return v.toString();
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  const input = $("videoUrl");
+  const btn = $("previewBtn");
+  if (btn) btn.addEventListener("click", previewVideo);
+  if (input) input.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") previewVideo();
+  });
+});
+
+
+document.addEventListener("DOMContentLoaded", () => {
+  // PREVIEW (igual ao que já tinhas)
+  const input = $("videoUrl");
+  const btn = $("previewBtn");
+  if (btn) btn.addEventListener("click", previewVideo);
+  if (input) input.addEventListener("keypress", (e) => {
+    if (e.key === "Enter") previewVideo();
+  });
+
+  // DOWNLOAD com SweetAlert2
+  const form = $("downloadForm");
+  const btnDownload = $("downloadBtn");
+  if (!form || !btnDownload) return;
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+
+    const fd = new FormData(form);
+    const url = fd.get("url");
+
+    if (!url) {
+      Swal.fire({
+        icon: "warning",
+        title: "Sem URL",
+        text: "Carrega primeiro as informações do vídeo antes de baixar."
+      });
+      return;
+    }
+
+    Swal.fire({
+      title: "A preparar o download…",
+      text: "Isto pode demorar alguns segundos.",
+      allowOutsideClick: false,
+      didOpen: () => Swal.showLoading()
+    });
+
+    try {
+      // POST relativo para passar no proxy do IIS (/youtube/download)
+      const res = await fetch("download", { method: "POST", body: fd });
+
+      if (!res.ok) {
+        let msg = "";
+        try { msg = await res.text(); } catch {}
+        throw new Error(`HTTP ${res.status} ${msg || ""}`.trim());
+      }
+
+      // Extrai nome do ficheiro do cabeçalho (se vier)
+      const dispo = res.headers.get("Content-Disposition") || "";
+      let filename = "video";
+      const m = dispo.match(/filename\*?=(?:UTF-8'')?["']?([^"';\n]+)["']?/i);
+      if (m) filename = decodeURIComponent(m[1]);
+
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = objectUrl;
+
+      // fallback da extensão se o servidor não a enviar
+      const q = fd.get("quality");
+      if (!/\.(mp4|mp3|m4a|webm|mkv)$/i.test(filename)) {
+        filename += (q === "audio") ? ".mp3" : ".mp4";
+      }
+      a.download = filename;
+
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objectUrl);
+
+      Swal.fire({
+        icon: "success",
+        title: "Download iniciado",
+        text: "Se não apareceu, verifica a pasta de downloads ou o bloqueador de pop-ups.",
+        showConfirmButton: true
+      });
+    } catch (err) {
+      Swal.fire({
+        icon: "error",
+        title: "Falha no download",
+        text: err.message || "Tenta novamente."
+      });
+    }
+  });
+});
+</script>
+
+
 </body>
 </html>

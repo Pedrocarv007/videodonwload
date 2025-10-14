@@ -1,63 +1,79 @@
 import os
 import re
 import shutil
+import logging
+import traceback
 from flask import Flask, render_template, request, send_file, jsonify, flash, redirect, url_for
 from flask_cors import CORS
 from pytubefix import YouTube
 from pytubefix.exceptions import VideoUnavailable, RegexMatchError
-import tempfile
-import threading
-from urllib.parse import urlparse
 from datetime import datetime
-from config import config
 
-# Initialize Flask app
-app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+# Configuração de logs
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
-# Load configuration
-config_name = os.environ.get('FLASK_CONFIG', 'default')
-app.config.from_object(config[config_name])
+# Initialize Flask app com configuração específica para IIS
+app = Flask(__name__, static_url_path="/youtube/static", static_folder="static")
+app.secret_key = os.environ.get('SECRET_KEY', 'youtube-downloader-secret-key-2024')
+
+# Configuração CORS para IIS
+CORS(app, 
+     origins=["*"], 
+     methods=["GET", "POST", "OPTIONS"],
+     allow_headers=["Content-Type", "Authorization"],
+     supports_credentials=True)
+
+# Configurações específicas para IIS
+HOST = '127.0.0.1'
+PORT = 6001
+DEBUG = True
+
+# Diretório de downloads
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
 
 # Create downloads directory if it doesn't exist
-DOWNLOADS_DIR = app.config['DOWNLOADS_DIR']
-if not os.path.exists(DOWNLOADS_DIR):
-    os.makedirs(DOWNLOADS_DIR)
-
-# Store download progress
-download_progress = {}
+def ensure_downloads_dir():
+    """Garante que o diretório de downloads existe"""
+    try:
+        if not os.path.exists(DOWNLOADS_DIR):
+            os.makedirs(DOWNLOADS_DIR)
+            logger.info(f"Diretório de downloads criado: {DOWNLOADS_DIR}")
+        return True
+    except Exception as e:
+        logger.error(f"Erro ao criar diretório de downloads: {e}")
+        return False
 
 def clean_downloads_folder():
-    """Clean all files from downloads folder"""
+    """Limpa todos os arquivos da pasta de downloads"""
     try:
-        for filename in os.listdir(DOWNLOADS_DIR):
-            file_path = os.path.join(DOWNLOADS_DIR, filename)
-            try:
-                if os.path.isfile(file_path) or os.path.islink(file_path):
-                    os.unlink(file_path)
-                elif os.path.isdir(file_path):
-                    shutil.rmtree(file_path)
-            except Exception as e:
-                print(f'Erro ao deletar {file_path}: {e}')
+        if os.path.exists(DOWNLOADS_DIR):
+            for filename in os.listdir(DOWNLOADS_DIR):
+                file_path = os.path.join(DOWNLOADS_DIR, filename)
+                try:
+                    if os.path.isfile(file_path) or os.path.islink(file_path):
+                        os.unlink(file_path)
+                        logger.info(f"Arquivo removido: {filename}")
+                    elif os.path.isdir(file_path):
+                        shutil.rmtree(file_path)
+                        logger.info(f"Diretório removido: {filename}")
+                except Exception as e:
+                    logger.warning(f'Erro ao deletar {file_path}: {e}')
+            logger.info("Limpeza da pasta de downloads concluída")
+        return True
     except Exception as e:
-        print(f'Erro ao limpar pasta de downloads: {e}')
-
-def progress_function(stream, chunk, bytes_remaining):
-    """Callback function to track download progress"""
-    total_size = stream.filesize
-    bytes_downloaded = total_size - bytes_remaining
-    percentage = (bytes_downloaded / total_size) * 100
-    
-    # Store progress for the current download
-    download_id = getattr(stream, 'download_id', 'default')
-    download_progress[download_id] = {
-        'percentage': round(percentage, 2),
-        'downloaded': bytes_downloaded,
-        'total': total_size
-    }
+        logger.error(f'Erro ao limpar pasta de downloads: {e}')
+        return False
 
 def is_valid_youtube_url(url):
-    """Validate if the URL is a valid YouTube URL"""
+    """Valida se a URL é uma URL válida do YouTube"""
     youtube_regex = re.compile(
         r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'
         r'(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})'
@@ -65,145 +81,258 @@ def is_valid_youtube_url(url):
     return youtube_regex.match(url) is not None
 
 def sanitize_filename(filename):
-    """Remove invalid characters from filename"""
-    # Remove invalid characters for Windows filenames
+    """Remove caracteres inválidos do nome do arquivo"""
     invalid_chars = '<>:"/\\|?*'
     for char in invalid_chars:
         filename = filename.replace(char, '_')
-    return filename[:100]  # Limit filename length
+    # Remove espaços duplos e limita tamanho
+    filename = ' '.join(filename.split())[:100]
+    return filename
 
 @app.route('/')
 def home():
-    return render_template('index.html')
+    """Página principal"""
+    try:
+        logger.info("Acessando página principal")
+        ensure_downloads_dir()
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Erro na página principal: {e}")
+        return f"Erro interno: {str(e)}", 500
 
-@app.route('/download', methods=['GET', 'POST'])
-def download_video():
-    if request.method == 'POST':
-        try:
-            url = request.form.get('url', '').strip()
-            quality = request.form.get('quality', 'highest')
-            
-            if not url:
-                flash('Por favor, insira uma URL do YouTube.', 'error')
-                return redirect(url_for('home'))
-            
-            if not is_valid_youtube_url(url):
-                flash('URL inválida. Por favor, insira uma URL válida do YouTube.', 'error')
-                return redirect(url_for('home'))
-            
-            # Limpar pasta de downloads antes do novo download
-            clean_downloads_folder()
-            
-            # Create YouTube object
-            yt = YouTube(url, on_progress_callback=progress_function)
-            
-            # Set download ID for progress tracking
-            download_id = str(datetime.now().timestamp())
-            
-            # Get video info
-            video_title = sanitize_filename(yt.title)
-            video_length = yt.length
-            
-            # Select stream based on quality preference
-            if quality == 'audio':
-                stream = yt.streams.filter(only_audio=True).first()
-                file_extension = '.mp3'
-            elif quality == 'lowest':
-                stream = yt.streams.filter(progressive=True).order_by('resolution').first()
-                file_extension = '.mp4'
-            else:  # highest quality
-                stream = yt.streams.get_highest_resolution()
-                file_extension = '.mp4'
-            
-            if not stream:
-                flash('Não foi possível encontrar um stream disponível para este vídeo.', 'error')
-                return redirect(url_for('home'))
-            
-            # Set download ID for progress tracking
-            stream.download_id = download_id
-            
-            # Create filename
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"{video_title}_{timestamp}{file_extension}"
-            filepath = os.path.join(DOWNLOADS_DIR, filename)
-            
-            # Download the video
-            stream.download(output_path=DOWNLOADS_DIR, filename=filename)
-            
-            # Clean up progress tracking
-            if download_id in download_progress:
-                del download_progress[download_id]
-            
-            flash(f'Vídeo "{yt.title}" baixado com sucesso!', 'success')
-            
-            # Return file for download
-            return send_file(
-                filepath,
-                as_attachment=True,
-                download_name=filename,
-                mimetype='application/octet-stream'
-            )
-            
-        except VideoUnavailable:
-            flash('Vídeo não disponível. Verifique se o vídeo existe e é público.', 'error')
-        except RegexMatchError:
-            flash('Erro ao processar a URL. Verifique se a URL está correta.', 'error')
-        except Exception as e:
-            flash(f'Erro inesperado: {str(e)}', 'error')
-        
-        return redirect(url_for('home'))
-    
-    return redirect(url_for('home'))
+@app.route('/test')
+def test():
+    """Rota de teste para verificar se a aplicação está funcionando"""
+    return jsonify({
+        'status': 'ok',
+        'message': 'Aplicação funcionando',
+        'timestamp': datetime.now().isoformat(),
+        'host': HOST,
+        'port': PORT,
+        'downloads_dir': DOWNLOADS_DIR
+    })
 
-@app.route('/video_info')
+@app.route('/video_info', methods=['POST', 'OPTIONS'])
 def get_video_info():
-    """Get video information without downloading"""
-    url = request.args.get('url', '').strip()
-    
-    if not url or not is_valid_youtube_url(url):
-        return jsonify({'error': 'URL inválida'}), 400
+    """Obtém informações do vídeo via POST JSON"""
+    # Handle CORS preflight
+    if request.method == 'OPTIONS':
+        return jsonify({'status': 'ok'})
     
     try:
+        logger.info("=== REQUISIÇÃO DE INFORMAÇÕES DO VÍDEO ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Content-Type: {request.content_type}")
+        
+        # Obter dados JSON
+        try:
+            data = request.get_json(force=True)
+            logger.info(f"JSON recebido: {data}")
+        except Exception as e:
+            logger.error(f"Erro ao parsear JSON: {e}")
+            return jsonify({'error': 'Dados JSON inválidos'}), 400
+        
+        if not data or 'url' not in data:
+            logger.warning("URL não fornecida na solicitação")
+            return jsonify({'error': 'URL não fornecida'}), 400
+        
+        url = data['url'].strip()
+        logger.info(f"URL a processar: {url}")
+        
+        # Validação da URL
+        if not url or not is_valid_youtube_url(url):
+            logger.warning(f"URL inválida: {url}")
+            return jsonify({'error': 'URL do YouTube inválida'}), 400
+        
+        # Obtém informações do vídeo
+        logger.info("Criando objeto YouTube...")
         yt = YouTube(url)
         
-        # Get available streams
-        video_streams = []
-        for stream in yt.streams.filter(progressive=True):
-            video_streams.append({
-                'resolution': stream.resolution,
-                'fps': stream.fps,
-                'filesize': stream.filesize
-            })
+        logger.info("Obtendo informações do vídeo...")
         
-        return jsonify({
-            'title': yt.title,
-            'length': yt.length,
-            'views': yt.views,
-            'author': yt.author,
-            'thumbnail': yt.thumbnail_url,
-            'streams': video_streams
-        })
-    
+        # Obter streams disponíveis para mostrar opções
+        video_streams = []
+        try:
+            for stream in yt.streams.filter(progressive=True).order_by('resolution').desc():
+                if stream.resolution:
+                    video_streams.append({
+                        'resolution': stream.resolution,
+                        'fps': stream.fps or 'N/A',
+                        'filesize_mb': round(stream.filesize / (1024*1024), 2) if stream.filesize else 'N/A'
+                    })
+        except:
+            video_streams = []
+        
+        video_info = {
+            'title': yt.title or 'Título não disponível',
+            'author': yt.author or 'Autor não disponível',
+            'length': yt.length or 0,
+            'views': yt.views or 0,
+            'thumbnail_url': yt.thumbnail_url or '',
+            'description': (yt.description[:200] + '...') if yt.description and len(yt.description) > 200 else (yt.description or 'Descrição não disponível'),
+            'streams': video_streams[:5]  # Mostra apenas os 5 primeiros
+        }
+        
+        logger.info(f"Informações obtidas para: {video_info['title']}")
+        return jsonify(video_info)
+        
+    except VideoUnavailable:
+        logger.error("Vídeo não disponível")
+        return jsonify({'error': 'Vídeo não disponível. Verifique se o vídeo existe e é público.'}), 400
+    except RegexMatchError:
+        logger.error("Erro no regex da URL")
+        return jsonify({'error': 'Erro ao processar a URL. Verifique se a URL está correta.'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 400
+        logger.error(f"Erro ao obter informações do vídeo: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Erro ao obter informações: {str(e)}'}), 500
 
-@app.route('/progress/<download_id>')
-def get_progress(download_id):
-    """Get download progress"""
-    progress = download_progress.get(download_id, {'percentage': 0})
-    return jsonify(progress)
+@app.route('/download', methods=['POST'])
+def download_video():
+    """Baixa o vídeo"""
+    try:
+        logger.info("=== REQUISIÇÃO DE DOWNLOAD ===")
+        logger.info(f"Method: {request.method}")
+        logger.info(f"Form data: {dict(request.form)}")
+        
+        url = request.form.get('url', '').strip()
+        quality = request.form.get('quality', 'high')
+        
+        logger.info(f"Download - URL: {url}, Qualidade: {quality}")
+        
+        if not url:
+            logger.warning("URL não fornecida para download")
+            return jsonify({'error': 'URL não fornecida'}), 400
+        
+        # Validação da URL
+        if not is_valid_youtube_url(url):
+            logger.warning(f"URL inválida para download: {url}")
+            return jsonify({'error': 'URL do YouTube inválida'}), 400
+        
+        # Garante que o diretório existe
+        if not ensure_downloads_dir():
+            return jsonify({'error': 'Erro ao criar diretório de downloads'}), 500
+        
+        # Limpa a pasta de downloads
+        clean_downloads_folder()
+        
+        # Cria objeto YouTube
+        logger.info("Criando objeto YouTube para download...")
+        yt = YouTube(url)
+        
+        # Sanitiza o nome do arquivo
+        safe_title = sanitize_filename(yt.title)
+        logger.info(f"Título sanitizado: {safe_title}")
+        
+        # Seleciona o stream baseado na qualidade
+        stream = None
+        filename = None
+        
+        if quality == 'audio':
+            logger.info("Buscando stream de áudio...")
+            stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
+            filename = f"{safe_title}.mp3"
+        elif quality == 'low':
+            logger.info("Buscando stream de baixa qualidade...")
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').first()
+            filename = f"{safe_title}_low.mp4"
+        else:  # high quality
+            logger.info("Buscando stream de alta qualidade...")
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            if not stream:
+                # Fallback para qualquer stream progressivo
+                stream = yt.streams.filter(progressive=True).first()
+            filename = f"{safe_title}.mp4"
+        
+        if not stream:
+            logger.error("Nenhum stream disponível para download")
+            return jsonify({'error': 'Nenhum formato disponível para download'}), 400
+        
+        logger.info(f"Stream selecionado: {stream}")
+        logger.info(f"Resolução: {stream.resolution}")
+        logger.info(f"Tamanho: {stream.filesize} bytes")
+        
+        # Caminho completo do arquivo
+        file_path = os.path.join(DOWNLOADS_DIR, filename)
+        logger.info(f"Baixando para: {file_path}")
+        
+        # Faz o download
+        stream.download(output_path=DOWNLOADS_DIR, filename=filename)
+        
+        # Verifica se o arquivo foi criado
+        if not os.path.exists(file_path):
+            logger.error(f"Arquivo não foi criado: {file_path}")
+            return jsonify({'error': 'Erro ao criar arquivo'}), 500
+        
+        file_size = os.path.getsize(file_path)
+        logger.info(f"Download concluído: {filename} ({file_size} bytes)")
+        
+        # Retorna o arquivo para download
+        return send_file(
+            file_path,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/octet-stream'
+        )
+        
+    except VideoUnavailable:
+        logger.error("Vídeo não disponível para download")
+        return jsonify({'error': 'Vídeo não disponível. Verifique se o vídeo existe e é público.'}), 400
+    except RegexMatchError:
+        logger.error("Erro no regex da URL para download")
+        return jsonify({'error': 'Erro ao processar a URL. Verifique se a URL está correta.'}), 400
+    except Exception as e:
+        logger.error(f"Erro no download: {e}")
+        logger.error(traceback.format_exc())
+        return jsonify({'error': f'Erro no download: {str(e)}'}), 500
 
 @app.errorhandler(404)
-def not_found(error):
-    return render_template('404.html'), 404
+def not_found_error(error):
+    """Página de erro 404"""
+    logger.warning(f"Página não encontrada: {request.url}")
+    return jsonify({'error': 'Página não encontrada'}), 404
 
 @app.errorhandler(500)
 def internal_error(error):
-    return render_template('500.html'), 500
+    """Página de erro 500"""
+    logger.error(f"Erro interno do servidor: {error}")
+    return jsonify({'error': 'Erro interno do servidor'}), 500
+
+@app.before_request
+def log_request_info():
+    """Log de todas as requisições"""
+    logger.info(f">>> {request.method} {request.url}")
+
+@app.after_request
+def log_response_info(response):
+    """Log de todas as respostas"""
+    logger.info(f"<<< {response.status_code}")
+    return response
 
 if __name__ == '__main__':
-    app.run(
-        debug=app.config['DEBUG'],
-        host=app.config['HOST'],
-        port=app.config['PORT']
-    )
+    print("=" * 60)
+    print("    YOUTUBE DOWNLOADER - VERSÃO IIS")
+    print("=" * 60)
+    print(f"Host: {HOST}")
+    print(f"Port: {PORT}")
+    print(f"Debug: {DEBUG}")
+    print(f"Downloads Dir: {DOWNLOADS_DIR}")
+    print(f"URL Local: http://{HOST}:{PORT}")
+    print(f"URL Teste: http://{HOST}:{PORT}/test")
+    print("=" * 60)
+    
+    logger.info("Iniciando aplicação YouTube Downloader para IIS")
+    
+    try:
+        ensure_downloads_dir()
+        app.run(
+            host=HOST,
+            port=PORT,
+            debug=DEBUG,
+            threaded=True
+        )
+    except Exception as e:
+        logger.error(f"Erro ao iniciar aplicação: {e}")
+        logger.error(traceback.format_exc())
+        print(f"\n❌ ERRO: {e}")
+        input("Pressione Enter para sair...")
