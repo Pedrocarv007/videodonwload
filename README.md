@@ -59,6 +59,12 @@ source venv/bin/activate
 3. **Instale as dependências**
 ```bash
 pip install flask pytubefix
+pip install -r requirements.txt
+```
+
+*Ou instale manualmente:*
+```bash
+pip install flask flask-cors pytubefix
 ```
 
 4. **Execute a aplicação**
